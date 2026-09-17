@@ -20,11 +20,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install requests pytz jdatetime
+        run: pip install requests pytz
 
       - name: Send reminder
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          # اختیاری — آی‌دی گروه/کانال‌هایی که فقط پیام یادآوری برایشان
+          # ارسال شود (دستورات از این چت‌ها پذیرفته نمی‌شود).
+          BROADCAST_CHAT_IDS: ${{ secrets.BROADCAST_CHAT_IDS }}
           TIMEZONE: "Asia/Tehran"
         run: python send_reminder.py
