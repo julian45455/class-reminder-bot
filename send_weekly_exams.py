@@ -1,0 +1,84 @@
+"""
+اسکریپت یادآوری هفتگی امتحان‌ها — برای اجرا توسط GitHub Actions
+هر پنج‌شنبه ساعت ۸ صبح اجرا می‌شود، امتحان‌های ۷ روز پیش‌رو (از امروز تا
+۶ روز بعد) را از exams.json پیدا می‌کند و پیام می‌فرستد.
+اگر امتحانی در این بازه نباشد، هیچ پیامی ارسال نمی‌شود.
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+
+import jdatetime
+import pytz
+import requests
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHAT_ID = os.environ["CHAT_ID"]
+TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
+WINDOW_DAYS = int(os.environ.get("EXAM_WINDOW_DAYS", 7))  # امروز + ۶ روز بعد = ۷ روز
+
+EXAMS_FILE = os.path.join(os.path.dirname(__file__), "exams.json")
+
+
+def load_exams():
+    if not os.path.exists(EXAMS_FILE):
+        return []
+    with open(EXAMS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def jalali_str(greg_date):
+    jd = jdatetime.date.fromgregorian(date=greg_date)
+    return f"{jd.year:04d}/{jd.month:02d}/{jd.day:02d}"
+
+
+def exams_in_window(exams, start_str, end_str):
+    # فرمت تاریخ‌ها YYYY/MM/DD با صفرِ ابتدایی است، پس مقایسه رشته‌ای همان
+    # ترتیب زمانی واقعی را می‌دهد.
+    items = [e for e in exams if start_str <= e.get("date", "") <= end_str]
+    items.sort(key=lambda e: e.get("date", ""))
+    return items
+
+
+def format_message(items, start_str, end_str):
+    lines = [f"📚 امتحان‌های هفته پیش‌رو ({start_str} تا {end_str}):"]
+    for e in items:
+        etype = f" — {e['type']}" if e.get("type") else ""
+        loc = f" — {e['location']}" if e.get("location") else ""
+        lines.append(f"🗓 {e.get('date', '?')}  |  {e.get('course', '?')}{etype}{loc}")
+    return "\n".join(lines)
+
+
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    resp = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def main():
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).date()
+    end_date = today + timedelta(days=WINDOW_DAYS - 1)
+
+    start_str = jalali_str(today)
+    end_str = jalali_str(end_date)
+
+    exams = load_exams()
+    items = exams_in_window(exams, start_str, end_str)
+
+    print(f"بازه بررسی‌شده (شمسی): {start_str} تا {end_str} — تعداد امتحان‌های پیدا‌شده: {len(items)}")
+
+    if not items:
+        print("امتحانی در این بازه نیست — پیامی ارسال نشد.")
+        return
+
+    text = format_message(items, start_str, end_str)
+    result = send_telegram_message(text)
+    print("ارسال شد:", result.get("ok"))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
