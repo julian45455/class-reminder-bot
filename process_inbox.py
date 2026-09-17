@@ -64,7 +64,8 @@ HELP_TEXT = (
     "دستورات مدیریتی:\n"
     "لیست  →  نمایش شماره‌دار امتحان‌ها\n"
     "حذف N  →  حذف امتحان شماره N\n"
-    "ویرایش N <متن جدید>  →  جایگزینی کامل امتحان N"
+    "حذف N, M, K  یا  حذف N-K  →  حذف چند امتحان یا یک بازه با هم\n"
+    "ویرایش N- متن جدید-  →  جایگزینی کامل امتحان N (خط تیرهٔ آخر اختیاری است)"
 )
 
 
@@ -195,6 +196,9 @@ def handle_command(text, exams, tz):
     """
     t = text.strip()
 
+    if t in ("/help", "راهنما", "/راهنما", "کمک"):
+        return HELP_TEXT, False, exams
+
     if t in ("/list", "لیست", "/لیست"):
         if not exams:
             return "هیچ امتحانی ثبت نشده.", False, exams
@@ -203,20 +207,44 @@ def handle_command(text, exams, tz):
         lines += [format_exam_line(i, e) for i, e in enumerate(sorted_exams, 1)]
         return "\n".join(lines), False, exams
 
-    m = re.match(r"^(?:/del(?:ete)?|حذف)\s+(\d+)\s*$", t)
+    m = re.match(r"^(?:/del(?:ete)?|حذف)\s+([0-9۰-۹,،\s\-]+)$", t)
     if m:
-        idx = int(m.group(1))
-        sorted_exams = sorted(exams, key=lambda x: x.get("date", ""))
-        if not (1 <= idx <= len(sorted_exams)):
-            return f"شماره {idx} معتبر نیست. برای دیدن شماره‌ها «لیست» بفرستید.", False, exams
-        target = sorted_exams[idx - 1]
-        new_exams = [e for e in exams if e is not target]
-        return f"🗑 حذف شد: «{target.get('course', '?')}» — {jalali_display(target.get('date', ''))}", True, new_exams
+        raw = normalize_digits(m.group(1)).strip()
+        tokens = [tok for tok in re.split(r"[,،\s]+", raw) if tok]
+        indices = set()
+        invalid = []
+        for tok in tokens:
+            rng = re.fullmatch(r"(\d+)-(\d+)", tok)
+            if rng:
+                a, b = int(rng.group(1)), int(rng.group(2))
+                if a > b:
+                    a, b = b, a
+                indices.update(range(a, b + 1))
+            elif re.fullmatch(r"\d+", tok):
+                indices.add(int(tok))
+            else:
+                invalid.append(tok)
+        if invalid:
+            return f"ورودی نامعتبر: {', '.join(invalid)}", False, exams
+        if not indices:
+            return "شماره‌ای برای حذف داده نشده.", False, exams
 
-    m = re.match(r"^(?:/edit|ویرایش)\s+(\d+)\s+(.+)$", t, re.S)
+        sorted_exams = sorted(exams, key=lambda x: x.get("date", ""))
+        bad = sorted(i for i in indices if not (1 <= i <= len(sorted_exams)))
+        if bad:
+            return f"شماره‌های نامعتبر: {', '.join(map(str, bad))}. برای دیدن شماره‌ها «لیست» بفرستید.", False, exams
+
+        targets = [sorted_exams[i - 1] for i in sorted(indices)]
+        target_ids = {id(e) for e in targets}
+        new_exams = [e for e in exams if id(e) not in target_ids]
+        lines = ["🗑 حذف شد:"]
+        lines += [format_exam_line(i, sorted_exams[i - 1]) for i in sorted(indices)]
+        return "\n".join(lines), True, new_exams
+
+    m = re.match(r"^(?:/edit|ویرایش)\s*(\d+)[\s\-]+(.+)$", t, re.S)
     if m:
         idx = int(m.group(1))
-        new_text = m.group(2)
+        new_text = re.sub(r"-+\s*$", "", m.group(2)).strip()
         sorted_exams = sorted(exams, key=lambda x: x.get("date", ""))
         if not (1 <= idx <= len(sorted_exams)):
             return f"شماره {idx} معتبر نیست. برای دیدن شماره‌ها «لیست» بفرستید.", False, exams
@@ -228,6 +256,7 @@ def handle_command(text, exams, tz):
         return f"✏️ ویرایش شد → {format_exam_line(idx, parsed)}", True, new_exams
 
     return None, False, exams
+
 
 
 def send_telegram_message(text):
