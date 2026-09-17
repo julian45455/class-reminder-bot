@@ -21,6 +21,12 @@ WINDOW_DAYS = int(os.environ.get("EXAM_WINDOW_DAYS", 7))  # امروز + ۶ رو
 
 EXAMS_FILE = os.path.join(os.path.dirname(__file__), "exams.json")
 
+PERSIAN_MONTHS = {
+    "فروردین": 1, "اردیبهشت": 2, "خرداد": 3, "تیر": 4, "مرداد": 5, "شهریور": 6,
+    "مهر": 7, "آبان": 8, "آذر": 9, "دی": 10, "بهمن": 11, "اسفند": 12,
+}
+MONTH_NAMES_REV = {v: k for k, v in PERSIAN_MONTHS.items()}
+
 
 def load_exams():
     if not os.path.exists(EXAMS_FILE):
@@ -34,6 +40,15 @@ def jalali_str(greg_date):
     return f"{jd.year:04d}/{jd.month:02d}/{jd.day:02d}"
 
 
+def jalali_display(date_str):
+    """ '1403/07/20' -> '20 مهر' """
+    try:
+        y, m, d = date_str.split("/")
+        return f"{int(d)} {MONTH_NAMES_REV[int(m)]}"
+    except Exception:
+        return date_str or "?"
+
+
 def exams_in_window(exams, start_str, end_str):
     # فرمت تاریخ‌ها YYYY/MM/DD با صفرِ ابتدایی است، پس مقایسه رشته‌ای همان
     # ترتیب زمانی واقعی را می‌دهد.
@@ -43,11 +58,19 @@ def exams_in_window(exams, start_str, end_str):
 
 
 def format_message(items, start_str, end_str):
-    lines = [f"📚 امتحان‌های هفته پیش‌رو ({start_str} تا {end_str}):"]
+    lines = [f"📚 امتحان‌های هفته پیش‌رو ({jalali_display(start_str)} تا {jalali_display(end_str)}):"]
     for e in items:
-        etype = f" — {e['type']}" if e.get("type") else ""
-        loc = f" — {e['location']}" if e.get("location") else ""
-        lines.append(f"🗓 {e.get('date', '?')}  |  {e.get('course', '?')}{etype}{loc}")
+        extra = []
+        if e.get("budget"):
+            extra.append(e["budget"])
+        if e.get("weekday"):
+            extra.append(e["weekday"])
+        if e.get("type"):
+            extra.append(e["type"])
+        if e.get("location"):
+            extra.append(e["location"])
+        extra_str = f" — {' — '.join(extra)}" if extra else ""
+        lines.append(f"🗓 {e.get('course', '?')}{extra_str} — {jalali_display(e.get('date', ''))}")
     return "\n".join(lines)
 
 
