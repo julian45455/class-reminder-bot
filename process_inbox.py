@@ -159,7 +159,7 @@ def parse_exam_message_legacy(text_norm, tz):
         return None
 
     course = text_norm[:m.start()] + text_norm[m.end():]
-    for w in WEEKDAY_WORDS:
+    for w in sorted(WEEKDAY_WORDS, key=len, reverse=True):
         course = course.replace(w, " ")
     course = re.sub(r"\s+", " ", course).strip(" \u200c-،,")
     if not course:
