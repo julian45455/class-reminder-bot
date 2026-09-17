@@ -26,6 +26,10 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          # اختیاری — آی‌دی گروه/کانال‌هایی که فقط پیام یادآوری برایشان
+          # ارسال شود (دستورات افزودن/ویرایش/حذف از این چت‌ها پذیرفته
+          # نمی‌شود، چون process_inbox.py فقط CHAT_ID را می‌خواند).
+          BROADCAST_CHAT_IDS: ${{ secrets.BROADCAST_CHAT_IDS }}
           TIMEZONE: "Asia/Tehran"
           EXAM_WINDOW_DAYS: "8"
         run: python send_weekly_exams.py
