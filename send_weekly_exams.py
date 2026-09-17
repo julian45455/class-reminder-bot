@@ -16,6 +16,9 @@ import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
+# آی‌دی گروه/کانال‌های اضافی برای ارسال یادآوری (فقط ارسال، نه خواندن دستور).
+# مقدار می‌تواند چند آی‌دی جدا شده با کاما باشد، مثلاً: "-1001234567890,-1009876543210"
+BROADCAST_CHAT_IDS = [c.strip() for c in os.environ.get("BROADCAST_CHAT_IDS", "").split(",") if c.strip()]
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
 WINDOW_DAYS = int(os.environ.get("EXAM_WINDOW_DAYS", 7))  # امروز + ۶ روز بعد = ۷ روز
 
@@ -74,9 +77,9 @@ def format_message(items, start_str, end_str):
     return "\n".join(lines)
 
 
-def send_telegram_message(text):
+def send_telegram_message(text, chat_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    resp = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=15)
+    resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
@@ -99,8 +102,13 @@ def main():
         return
 
     text = format_message(items, start_str, end_str)
-    result = send_telegram_message(text)
-    print("ارسال شد:", result.get("ok"))
+    targets = [CHAT_ID] + BROADCAST_CHAT_IDS
+    for chat_id in targets:
+        try:
+            result = send_telegram_message(text, chat_id)
+            print(f"ارسال شد به {chat_id}:", result.get("ok"))
+        except requests.RequestException as exc:
+            print(f"ارسال به {chat_id} ناموفق بود:", exc)
 
 
 if __name__ == "__main__":
