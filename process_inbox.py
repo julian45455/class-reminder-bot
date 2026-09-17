@@ -287,7 +287,12 @@ def get_dispatch_message():
     update = payload.get("update")
     if not update:
         return None
-    return update.get("message") or update.get("edited_message")
+    return (
+        update.get("message")
+        or update.get("edited_message")
+        or update.get("channel_post")
+        or update.get("edited_channel_post")
+    )
 
 
 def collect_messages(tz):
@@ -302,7 +307,12 @@ def collect_messages(tz):
     messages = []
     for upd in updates:
         state["last_update_id"] = upd["update_id"]
-        m = upd.get("message") or upd.get("edited_message")
+        m = (
+            upd.get("message")
+            or upd.get("edited_message")
+            or upd.get("channel_post")
+            or upd.get("edited_channel_post")
+        )
         if m:
             messages.append(m)
     save_json(STATE_FILE, state)
@@ -324,6 +334,7 @@ def main():
             continue
         chat_id = str(msg["chat"]["id"])
         if chat_id != str(CHAT_ID):
+            print(f"پیام از چت ناشناس نادیده گرفته شد — chat_id={chat_id} | chat_type={msg['chat'].get('type')} | title={msg['chat'].get('title', msg['chat'].get('username', ''))}")
             continue
 
         text = msg["text"].strip()
