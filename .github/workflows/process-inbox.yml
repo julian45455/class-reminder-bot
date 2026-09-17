@@ -1,12 +1,12 @@
-name: Process Telegram Inbox (Auto-add Exams)
+name: Process Telegram Inbox (Auto-add/Edit/Delete Exams)
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"   # هر ۵ دقیقه — چون ریپازیتوری Public است محدودیت دقیقه ندارد
-  workflow_dispatch: {}
+  repository_dispatch:
+    types: [telegram_update]   # از Cloudflare Worker می‌آید، لحظه‌ای اجرا می‌شود
+  workflow_dispatch: {}        # اجرای دستی برای تست (از getUpdates قدیمی استفاده می‌کند)
 
 permissions:
-  contents: write   # اجازه commit/push به همین ریپازیتوری با توکن پیش‌فرض
+  contents: write
 
 jobs:
   process-inbox:
@@ -38,6 +38,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "تغییری برای commit نیست."
           else
-            git commit -m "ثبت خودکار امتحان از تلگرام"
+            git commit -m "ثبت/ویرایش/حذف خودکار امتحان از تلگرام"
             git push
           fi
