@@ -1,0 +1,31 @@
+name: Weekly Exam Reminder
+
+on:
+  schedule:
+    # 04:30 UTC = 08:00 Asia/Tehran (UTC+3:30) on Thursdays.
+    # اگر روز یا ساعت را عوض کردید، این عدد را متناسب تغییر دهید.
+    - cron: "30 4 * * 4"
+  workflow_dispatch: {}   # امکان اجرای دستی از تب Actions برای تست
+
+jobs:
+  send-exam-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests pytz jdatetime
+
+      - name: Send weekly exam reminder
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TIMEZONE: "Asia/Tehran"
+          EXAM_WINDOW_DAYS: "8"
+        run: python send_weekly_exams.py
