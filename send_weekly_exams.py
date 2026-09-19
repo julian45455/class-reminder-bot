@@ -60,8 +60,8 @@ def exams_in_window(exams, start_str, end_str):
     return items
 
 
-def format_message(items, start_str, end_str):
-    lines = [f"📚 امتحان‌های هفته پیش‌رو ({jalali_display(start_str)} تا {jalali_display(end_str)}):"]
+def format_message(items, start_str, end_str, window_days):
+    lines = [f"📚 کارهای مهم دانشگاه در {window_days} روز آینده ({jalali_display(start_str)} تا {jalali_display(end_str)}):"]
     for e in items:
         extra = []
         if e.get("budget"):
@@ -101,7 +101,7 @@ def main():
         print("امتحانی در این بازه نیست — پیامی ارسال نشد.")
         return
 
-    text = format_message(items, start_str, end_str)
+    text = format_message(items, start_str, end_str, WINDOW_DAYS)
     targets = [CHAT_ID] + BROADCAST_CHAT_IDS
     for chat_id in targets:
         try:
