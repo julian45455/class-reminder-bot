@@ -9,6 +9,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 
+import jdatetime
 import pytz
 import requests
 
@@ -19,9 +20,6 @@ CHAT_ID = os.environ["CHAT_ID"]
 BROADCAST_CHAT_IDS = [c.strip() for c in os.environ.get("BROADCAST_CHAT_IDS", "").split(",") if c.strip()]
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
 
-WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday",
-               "Friday", "Saturday", "Sunday"]
-
 SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), "schedule.json")
 
 
@@ -30,9 +28,13 @@ def load_schedule():
         return json.load(f)
 
 
-def classes_for_day(schedule, day_name):
-    day_name = day_name.strip().lower()
-    items = [c for c in schedule if c.get("day", "").strip().lower() == day_name]
+def jalali_str(greg_date):
+    jd = jdatetime.date.fromgregorian(date=greg_date)
+    return f"{jd.year:04d}/{jd.month:02d}/{jd.day:02d}"
+
+
+def classes_for_day(schedule, date_str):
+    items = [c for c in schedule if c.get("date", "").strip() == date_str]
     items.sort(key=lambda c: c.get("time", ""))
     return items
 
@@ -54,9 +56,10 @@ def send_telegram_message(text, chat_id):
 
 def main():
     tz = pytz.timezone(TIMEZONE)
-    tomorrow = datetime.now(tz) + timedelta(days=1)
+    tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
+    tomorrow_jalali = jalali_str(tomorrow)
     schedule = load_schedule()
-    items = classes_for_day(schedule, WEEKDAYS_EN[tomorrow.weekday()])
+    items = classes_for_day(schedule, tomorrow_jalali)
 
     if not items:
         print("فردا کلاسی نیست — پیامی ارسال نشد.")
