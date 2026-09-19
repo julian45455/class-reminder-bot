@@ -2,9 +2,9 @@ name: Weekly Exam Reminder
 
 on:
   schedule:
-    # 04:30 UTC = 08:00 Asia/Tehran (UTC+3:30) on Thursdays.
+    # 14:30 UTC = 18:00 Asia/Tehran (UTC+3:30) on Wednesdays.
     # اگر روز یا ساعت را عوض کردید، این عدد را متناسب تغییر دهید.
-    - cron: "30 4 * * 4"
+    - cron: "30 14 * * 3"
   workflow_dispatch: {}   # امکان اجرای دستی از تب Actions برای تست
 
 jobs:
@@ -31,5 +31,5 @@ jobs:
           # نمی‌شود، چون process_inbox.py فقط CHAT_ID را می‌خواند).
           BROADCAST_CHAT_IDS: ${{ secrets.BROADCAST_CHAT_IDS }}
           TIMEZONE: "Asia/Tehran"
-          EXAM_WINDOW_DAYS: "8"
+          EXAM_WINDOW_DAYS: "12"
         run: python send_weekly_exams.py
