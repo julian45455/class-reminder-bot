@@ -39,6 +39,7 @@ TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
 
 EXAMS_FILE = os.path.join(os.path.dirname(__file__), "exams.json")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "bot_state.json")
+NOTES_FILE = os.path.join(os.path.dirname(__file__), "notes.json")
 
 PERSIAN_MONTHS = {
     "فروردین": 1, "اردیبهشت": 2, "خرداد": 3, "تیر": 4, "مرداد": 5, "شهریور": 6,
@@ -63,6 +64,10 @@ HELP_TEXT = (
     "مثال: امتحان زبان - فصل ۱ تا ۳ - سه‌شنبه - 20 - مهر\n\n"
     "دستورات مدیریتی:\n"
     "کارهای مهم  →  گزارش کارهای مهم دانشگاه در بازهٔ پیش‌رو (از امروز)\n"
+    "یادداشت - <متن> - <روز یا چند روز با کاما> - <ماه>  →  یادداشتی که در پیام روزانهٔ شب قبل از آن روزها می‌آید\n"
+    "مثال: یادداشت - بخش جراحی خالیه - 20, 27 - مهر\n"
+    "یادداشت‌ها  →  لیست شماره‌دار یادداشت‌ها\n"
+    "حذف یادداشت N  (یا چند شماره / بازه)  →  حذف یادداشت\n"
     "لیست  →  نمایش شماره‌دار امتحان‌ها\n"
     "حذف N  →  حذف امتحان شماره N\n"
     "حذف N, M, K  یا  حذف N-K  →  حذف چند امتحان یا یک بازه با هم\n"
@@ -267,6 +272,94 @@ def handle_command(text, exams, tz):
 
 
 
+NOTE_PREFIXES = ("یادداشت", "/note")
+NOTE_USAGE = (
+    "فرمت یادداشت:\n"
+    "یادداشت - <متن> - <روز یا چند روز با کاما> - <ماه>\n"
+    "مثال: یادداشت - بخش جراحی خالیه - 20, 27 - مهر"
+)
+
+
+def parse_index_list(raw):
+    raw = normalize_digits(raw).strip()
+    tokens = [tok for tok in re.split(r"[,،\s]+", raw) if tok]
+    indices, invalid = set(), []
+    for tok in tokens:
+        rng = re.fullmatch(r"(\d+)-(\d+)", tok)
+        if rng:
+            a, b = sorted((int(rng.group(1)), int(rng.group(2))))
+            indices.update(range(a, b + 1))
+        elif re.fullmatch(r"\d+", tok):
+            indices.add(int(tok))
+        else:
+            invalid.append(tok)
+    return indices, invalid
+
+
+def format_note_line(idx, n):
+    return f"{idx}) {n.get('text', '?')} — {jalali_display(n.get('date', ''))}"
+
+
+def handle_note_command(text, notes, tz):
+    """
+    یادداشت‌های تاریخ‌دار برای پیام روزانه (notes.json).
+    خروجی: (reply یا None اگر دستور یادداشت نبود, changed, notes)
+    """
+    tn = normalize_digits(text.strip()).replace("\u200c", " ")
+
+    if tn in ("/notes", "یادداشت ها"):
+        if not notes:
+            return "هیچ یادداشتی ثبت نشده.", False, notes
+        ordered = sorted(notes, key=lambda x: x.get("date", ""))
+        lines = ["📝 یادداشت‌های ثبت‌شده:"]
+        lines += [format_note_line(i, n) for i, n in enumerate(ordered, 1)]
+        return "\n".join(lines), False, notes
+
+    m = re.match(r"^(?:/delnote|حذف یادداشت)\s+([0-9,،\s\-]+)$", tn)
+    if m:
+        indices, invalid = parse_index_list(m.group(1))
+        if invalid or not indices:
+            return "ورودی نامعتبر. مثال: حذف یادداشت 2 یا حذف یادداشت 1, 3-4", False, notes
+        ordered = sorted(notes, key=lambda x: x.get("date", ""))
+        bad = sorted(i for i in indices if not (1 <= i <= len(ordered)))
+        if bad:
+            return f"شماره‌های نامعتبر: {', '.join(map(str, bad))}. برای دیدن شماره‌ها «یادداشت‌ها» بفرستید.", False, notes
+        targets = [ordered[i - 1] for i in sorted(indices)]
+        target_ids = {id(n) for n in targets}
+        new_notes = [n for n in notes if id(n) not in target_ids]
+        lines = ["🗑 یادداشت حذف شد:"]
+        lines += [format_note_line(i, ordered[i - 1]) for i in sorted(indices)]
+        return "\n".join(lines), True, new_notes
+
+    parts = [p.strip() for p in DASH_RE.split(tn)]
+    parts = [p for p in parts if p]
+    if not parts or parts[0] not in NOTE_PREFIXES:
+        return None, False, notes
+    if len(parts) < 4:
+        return NOTE_USAGE, False, notes
+
+    month = PERSIAN_MONTHS.get(parts[-1])
+    day_tokens = [d for d in re.split(r"[,،\s]+", parts[-2]) if d]
+    if month is None or not day_tokens or not all(re.fullmatch(r"\d{1,2}", d) for d in day_tokens):
+        return NOTE_USAGE, False, notes
+    note_text = " - ".join(parts[1:-2])
+
+    added, new_notes = [], list(notes)
+    for d in day_tokens:
+        try:
+            jd = guess_jalali_year(month, int(d), tz)
+        except ValueError:
+            return f"روز {d} برای این ماه معتبر نیست.", False, notes
+        date_str = f"{jd.year:04d}/{jd.month:02d}/{jd.day:02d}"
+        if any(n.get("date") == date_str and n.get("text") == note_text for n in new_notes):
+            continue
+        new_notes.append({"date": date_str, "text": note_text})
+        added.append(jalali_display(date_str))
+    if not added:
+        return "این یادداشت از قبل برای همین تاریخ‌ها ثبت شده.", False, notes
+    return f"📝 ثبت شد: «{note_text}» — {'، '.join(added)}", True, new_notes
+
+
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=15)
@@ -335,7 +428,9 @@ def main():
         return
 
     exams = load_json(EXAMS_FILE, [])
+    notes = load_json(NOTES_FILE, [])
     changed = False
+    notes_changed = False
 
     for msg in messages:
         if "text" not in msg:
@@ -346,6 +441,12 @@ def main():
             continue
 
         text = msg["text"].strip()
+
+        reply, note_changed, notes = handle_note_command(text, notes, tz)
+        if reply is not None:
+            send_telegram_message(reply)
+            notes_changed = notes_changed or note_changed
+            continue
 
         reply, cmd_changed, exams = handle_command(text, exams, tz)
         if reply is not None:
@@ -376,6 +477,10 @@ def main():
     if changed:
         exams.sort(key=lambda e: e.get("date", ""))
         save_json(EXAMS_FILE, exams)
+
+    if notes_changed:
+        notes.sort(key=lambda n: n.get("date", ""))
+        save_json(NOTES_FILE, notes)
 
 
 if __name__ == "__main__":
