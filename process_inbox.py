@@ -62,6 +62,7 @@ HELP_TEXT = (
     "«<درس> - <بودجه‌بندی اختیاری> - <روز هفته اختیاری> - <روز عددی> - <ماه>»\n"
     "مثال: امتحان زبان - فصل ۱ تا ۳ - سه‌شنبه - 20 - مهر\n\n"
     "دستورات مدیریتی:\n"
+    "کارهای مهم  →  گزارش کارهای مهم دانشگاه در بازهٔ پیش‌رو (از امروز)\n"
     "لیست  →  نمایش شماره‌دار امتحان‌ها\n"
     "حذف N  →  حذف امتحان شماره N\n"
     "حذف N, M, K  یا  حذف N-K  →  حذف چند امتحان یا یک بازه با هم\n"
@@ -198,6 +199,13 @@ def handle_command(text, exams, tz):
 
     if t in ("/help", "راهنما", "/راهنما", "کمک"):
         return HELP_TEXT, False, exams
+
+    if t in ("/upcoming", "کارهای مهم", "/کارهای_مهم"):
+        from send_weekly_exams import build_report, WINDOW_DAYS
+        text, start_str, end_str = build_report(exams, tz, WINDOW_DAYS, start_offset=0)
+        if text is None:
+            return f"کار مهمی در {WINDOW_DAYS} روز آینده ثبت نشده.", False, exams
+        return text, False, exams
 
     if t in ("/list", "لیست", "/لیست"):
         if not exams:
