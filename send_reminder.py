@@ -21,11 +21,24 @@ BROADCAST_CHAT_IDS = [c.strip() for c in os.environ.get("BROADCAST_CHAT_IDS", ""
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
 
 SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), "schedule.json")
+EXAMS_FILE = os.path.join(os.path.dirname(__file__), "exams.json")
+NOTES_FILE = os.path.join(os.path.dirname(__file__), "notes.json")
 
 
 def load_schedule():
     with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_optional(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def items_for_date(entries, date_str):
+    return [e for e in entries if e.get("date", "").strip() == date_str]
 
 
 def jalali_str(greg_date):
@@ -39,11 +52,19 @@ def classes_for_day(schedule, date_str):
     return items
 
 
-def format_message(items):
-    lines = ["🔔 یادآوری: برنامه کلاسی فردا"]
-    for c in items:
+def format_message(classes, exams, notes):
+    lines = ["🔔 یادآوری: برنامه فردا"]
+    for c in classes:
         loc = f" — {c['location']}" if c.get("location") else ""
         lines.append(f"⏰ {c.get('time', '?')}  |  {c.get('course', '?')}{loc}")
+    if exams:
+        lines.append("⚠️ کار مهم فردا:")
+        for e in exams:
+            extra = [x for x in (e.get("budget"), e.get("weekday"), e.get("type"), e.get("location")) if x]
+            extra_str = f" — {' — '.join(extra)}" if extra else ""
+            lines.append(f"🗓 {e.get('course', '?')}{extra_str}")
+    for n in notes:
+        lines.append(f"📝 {n.get('text', '')}")
     return "\n".join(lines)
 
 
@@ -59,13 +80,15 @@ def main():
     tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
     tomorrow_jalali = jalali_str(tomorrow)
     schedule = load_schedule()
-    items = classes_for_day(schedule, tomorrow_jalali)
+    classes = classes_for_day(schedule, tomorrow_jalali)
+    exams = items_for_date(load_optional(EXAMS_FILE), tomorrow_jalali)
+    notes = items_for_date(load_optional(NOTES_FILE), tomorrow_jalali)
 
-    if not items:
-        print("فردا کلاسی نیست — پیامی ارسال نشد.")
+    if not (classes or exams or notes):
+        print("فردا کلاس/کار مهم/یادداشتی نیست — پیامی ارسال نشد.")
         return
 
-    text = format_message(items)
+    text = format_message(classes, exams, notes)
     targets = [CHAT_ID] + BROADCAST_CHAT_IDS
     for chat_id in targets:
         try:
