@@ -63,6 +63,7 @@ HELP_TEXT = (
     "«<درس> - <بودجه‌بندی اختیاری> - <روز هفته اختیاری> - <روز عددی> - <ماه>»\n"
     "مثال: امتحان زبان - فصل ۱ تا ۳ - سه‌شنبه - 20 - مهر\n\n"
     "دستورات مدیریتی:\n"
+    "چند مورد در یک پیام: هر مورد را در یک خط جدا (یا با ؛ جدا) بنویسید؛ همه جداگانه ثبت می‌شوند\n"
     "کارهای مهم  →  گزارش کارهای مهم دانشگاه در بازهٔ پیش‌رو (از امروز)\n"
     "یادداشت - <متن> - <روز یا چند روز با کاما> - <ماه>  →  یادداشتی که در پیام روزانهٔ شب قبل از آن روزها می‌آید\n"
     "مثال: یادداشت - بخش جراحی خالیه - 20, 27 - مهر\n"
@@ -360,6 +361,25 @@ def handle_note_command(text, notes, tz):
     return f"📝 ثبت شد: «{note_text}» — {'، '.join(added)}", True, new_notes
 
 
+LIST_MARKER_RE = re.compile(r"^\s*(?:[•*]|\d+[.)])\s*")
+
+
+def split_entries(text):
+    """متن چندخطی (یا جداشده با ؛) را به موارد جدا می‌شکند؛ شماره‌گذاری/بولت ابتدای خط حذف می‌شود."""
+    entries = []
+    for chunk in re.split(r"[\n;؛]+", text):
+        chunk = LIST_MARKER_RE.sub("", chunk).strip()
+        if chunk:
+            entries.append(chunk)
+    return entries
+
+
+def format_added(parsed):
+    extra = [x for x in (parsed.get("budget"), parsed.get("weekday")) if x]
+    extra_str = f" — {' — '.join(extra)}" if extra else ""
+    return f"«{parsed['course']}»{extra_str} — {jalali_display(parsed['date'])}"
+
+
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=15)
@@ -457,22 +477,45 @@ def main():
         if text.startswith("/"):
             continue  # سایر دستورات ناشناخته را نادیده بگیر
 
-        parsed = parse_exam_message(text, tz)
-        if parsed is None:
-            send_telegram_message(HELP_TEXT)
+        entries = split_entries(text)
+
+        if len(entries) <= 1:
+            parsed = parse_exam_message(text, tz)
+            if parsed is None:
+                send_telegram_message(HELP_TEXT)
+                continue
+            exams.append(parsed)
+            changed = True
+            send_telegram_message(f"✅ ثبت شد: {format_added(parsed)}")
             continue
 
-        exams.append(parsed)
-        changed = True
-        extra = []
-        if parsed.get("budget"):
-            extra.append(parsed["budget"])
-        if parsed.get("weekday"):
-            extra.append(parsed["weekday"])
-        extra_str = f" — {' — '.join(extra)}" if extra else ""
-        send_telegram_message(
-            f"✅ ثبت شد: «{parsed['course']}»{extra_str} — {jalali_display(parsed['date'])}"
-        )
+        # چند مورد در یک پیام: هر خط/بخش جداگانه پارس و ذخیره می‌شود
+        added, duplicates, failed = [], [], []
+        for entry in entries:
+            parsed = parse_exam_message(entry, tz)
+            if parsed is None:
+                failed.append(entry)
+            elif any(e.get("date") == parsed["date"] and e.get("course") == parsed["course"] for e in exams):
+                duplicates.append(parsed)
+            else:
+                exams.append(parsed)
+                added.append(parsed)
+
+        if added:
+            changed = True
+        lines = []
+        if added:
+            added.sort(key=lambda e: e.get("date", ""))
+            lines.append(f"✅ {len(added)} مورد ثبت شد:")
+            lines += [f"• {format_added(e)}" for e in added]
+        if duplicates:
+            lines.append(f"↩️ {len(duplicates)} مورد تکراری بود (ثبت نشد):")
+            lines += [f"• {format_added(e)}" for e in duplicates]
+        if failed:
+            lines.append(f"⚠️ {len(failed)} مورد قابل‌تشخیص نبود (ثبت نشد):")
+            lines += [f"• {f}" for f in failed]
+            lines.append("فرمت: درس - بودجه‌بندی (اختیاری) - روز هفته (اختیاری) - روز - ماه")
+        send_telegram_message("\n".join(lines))
 
     if changed:
         exams.sort(key=lambda e: e.get("date", ""))
