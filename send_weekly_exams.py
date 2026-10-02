@@ -20,7 +20,7 @@ CHAT_ID = os.environ["CHAT_ID"]
 # مقدار می‌تواند چند آی‌دی جدا شده با کاما باشد، مثلاً: "-1001234567890,-1009876543210"
 BROADCAST_CHAT_IDS = [c.strip() for c in os.environ.get("BROADCAST_CHAT_IDS", "").split(",") if c.strip()]
 TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
-WINDOW_DAYS = int(os.environ.get("EXAM_WINDOW_DAYS", 7))  # امروز + ۶ روز بعد = ۷ روز
+WINDOW_DAYS = int(os.environ.get("EXAM_WINDOW_DAYS", 12))  # تعداد روزهای بازه
 
 EXAMS_FILE = os.path.join(os.path.dirname(__file__), "exams.json")
 
@@ -84,24 +84,37 @@ def send_telegram_message(text, chat_id):
     return resp.json()
 
 
-def main():
-    tz = pytz.timezone(TIMEZONE)
+def build_report(exams, tz, window_days=None, start_offset=0):
+    """
+    گزارش کارهای مهم را می‌سازد. start_offset=0 یعنی از امروز، 1 یعنی از فردا.
+    خروجی: (متن پیام یا None اگر موردی نبود, start_str, end_str)
+    """
+    window_days = window_days or WINDOW_DAYS
     today = datetime.now(tz).date()
-    end_date = today + timedelta(days=WINDOW_DAYS - 1)
+    start_date = today + timedelta(days=start_offset)
+    end_date = start_date + timedelta(days=window_days - 1)
 
-    start_str = jalali_str(today)
+    start_str = jalali_str(start_date)
     end_str = jalali_str(end_date)
 
-    exams = load_exams()
     items = exams_in_window(exams, start_str, end_str)
-
-    print(f"بازه بررسی‌شده (شمسی): {start_str} تا {end_str} — تعداد امتحان‌های پیدا‌شده: {len(items)}")
-
     if not items:
-        print("امتحانی در این بازه نیست — پیامی ارسال نشد.")
+        return None, start_str, end_str
+    return format_message(items, start_str, end_str, window_days), start_str, end_str
+
+
+def main():
+    tz = pytz.timezone(TIMEZONE)
+    exams = load_exams()
+
+    # اجرای زمان‌بندی‌شده: از فردا شروع می‌کند (امروز را شامل نمی‌شود)
+    text, start_str, end_str = build_report(exams, tz, WINDOW_DAYS, start_offset=1)
+    print(f"بازه بررسی‌شده (شمسی): {start_str} تا {end_str}")
+
+    if text is None:
+        print("موردی در این بازه نیست — پیامی ارسال نشد.")
         return
 
-    text = format_message(items, start_str, end_str, WINDOW_DAYS)
     targets = [CHAT_ID] + BROADCAST_CHAT_IDS
     for chat_id in targets:
         try:
