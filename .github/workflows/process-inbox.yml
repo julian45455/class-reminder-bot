@@ -34,7 +34,9 @@ jobs:
         run: |
           git config user.name "exam-bot"
           git config user.email "actions@github.com"
-          git add exams.json bot_state.json
+          for f in exams.json bot_state.json notes.json; do
+            [ -f "$f" ] && git add "$f"
+          done
           if git diff --cached --quiet; then
             echo "تغییری برای commit نیست."
           else
