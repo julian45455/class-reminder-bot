@@ -77,6 +77,7 @@ def send_telegram_message(text, chat_id):
 
 def main():
     tz = pytz.timezone(TIMEZONE)
+    print(f"زمان اجرا (تهران): {datetime.now(tz):%Y-%m-%d %H:%M} | trigger: {os.environ.get('GITHUB_EVENT_NAME', '?')}")
     tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
     tomorrow_jalali = jalali_str(tomorrow)
     schedule = load_schedule()
