@@ -105,6 +105,7 @@ def build_report(exams, tz, window_days=None, start_offset=0):
 
 def main():
     tz = pytz.timezone(TIMEZONE)
+    print(f"زمان اجرا (تهران): {datetime.now(tz):%Y-%m-%d %H:%M} | trigger: {os.environ.get('GITHUB_EVENT_NAME', '?')}")
     exams = load_exams()
 
     # اجرای زمان‌بندی‌شده: از فردا شروع می‌کند (امروز را شامل نمی‌شود)
