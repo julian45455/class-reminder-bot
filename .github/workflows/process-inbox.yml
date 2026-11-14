@@ -1,9 +1,15 @@
-name: Process Telegram Inbox (Auto-add/Edit/Delete Exams)
+name: Process Telegram Inbox
 
 on:
   repository_dispatch:
-    types: [telegram_update]   # از Cloudflare Worker می‌آید، لحظه‌ای اجرا می‌شود
-  workflow_dispatch: {}        # اجرای دستی برای تست (از getUpdates قدیمی استفاده می‌کند)
+    types:
+      - telegram_updates_batch
+      - telegram_update # سازگاری با Worker قدیمی
+
+# فقط یک پردازش‌گر ورودی در هر لحظه اجرا شود؛ ترتیب فرمان‌ها حفظ شود.
+concurrency:
+  group: telegram-inbox-processor
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -11,8 +17,9 @@ permissions:
 jobs:
   process-inbox:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -23,23 +30,68 @@ jobs:
       - name: Install dependencies
         run: pip install requests pytz jdatetime
 
-      - name: Process inbox
+      - name: Process Telegram batch
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           TIMEZONE: "Asia/Tehran"
         run: python process_inbox.py
 
-      - name: Commit changes if any
+      # ابتدا داده‌ها و outbox را commit می‌کنیم؛ فقط بعد از آن پاسخ‌ها ارسال می‌شوند.
+      - name: Commit processed data
         run: |
           git config user.name "exam-bot"
           git config user.email "actions@github.com"
-          for f in exams.json bot_state.json notes.json; do
-            [ -f "$f" ] && git add "$f"
-          done
+          git add exams.json bot_state.json notes.json outbox.json
           if git diff --cached --quiet; then
-            echo "تغییری برای commit نیست."
+            echo "No data changes to commit."
           else
-            git commit -m "ثبت/ویرایش/حذف خودکار امتحان از تلگرام"
+            git commit -m "Process Telegram inbox batch"
             git push
           fi
+
+      - name: Send queued Telegram replies
+        id: send_replies
+        if: github.event_name == 'repository_dispatch'
+        continue-on-error: true
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python send_outbox.py
+
+      # حتی اگر ارسال بعضی پاسخ‌ها شکست بخورد، وضعیت پاسخ‌های موفق را نگه می‌داریم.
+      - name: Commit outbox delivery status
+        if: always() && steps.send_replies.outcome != 'skipped'
+        run: |
+          git config user.name "exam-bot"
+          git config user.email "actions@github.com"
+          git add outbox.json
+          if git diff --cached --quiet; then
+            echo "No outbox status changes to commit."
+          else
+            git commit -m "Update Telegram reply delivery status"
+            git push
+          fi
+
+      - name: Fail batch so Cloudflare retries undelivered replies
+        if: steps.send_replies.outcome == 'failure'
+        run: |
+          echo "At least one Telegram reply is still pending. Cloudflare will retry this batch."
+          exit 1
+
+      # فقط batch جدید Cloudflare پس از پردازش، commit و ارسال پاسخ‌ها ACK می‌شود.
+      - name: Acknowledge batch to Cloudflare
+        if: success() && github.event_name == 'repository_dispatch' && github.event.client_payload.batch_id
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          WORKER_ACK_SECRET: ${{ secrets.WORKER_ACK_SECRET }}
+          BATCH_ID: ${{ github.event.client_payload.batch_id }}
+        run: |
+          if [ -z "$WORKER_URL" ] || [ -z "$WORKER_ACK_SECRET" ]; then
+            echo "WORKER_URL variable and WORKER_ACK_SECRET secret must be configured."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            -X POST "${WORKER_URL%/}/ack" \
+            -H "Content-Type: application/json" \
+            -H "X-Worker-Ack-Secret: ${WORKER_ACK_SECRET}" \
+            --data "{\"batch_id\":\"${BATCH_ID}\"}"

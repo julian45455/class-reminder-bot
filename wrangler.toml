@@ -1,0 +1,22 @@
+﻿# Ù†Ø§Ù… Ø±Ø§ Ø¨Ø§ Ù†Ø§Ù… Worker ÙØ¹Ù„ÛŒ Ø®ÙˆØ¯Øª Ø¯Ø± Cloudflare ÛŒÚ©ÛŒ Ú©Ù† ØªØ§ Ù‡Ù…Ø§Ù† Worker Ø¨Ù‡â€ŒØ±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ Ø´ÙˆØ¯.
+name = "class-reminder-telegram-bridge"
+main = "worker.js"
+compatibility_date = "2026-11-13"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "TELEGRAM_BATCHER"
+class_name = "TelegramBatcher"
+
+# ØªØ¹Ø±ÛŒÙ declarative Ú©Ù„Ø§Ø³ Durable Object Ø¨Ø§ SQLite (Ø±ÙˆØ´ Ù¾ÛŒØ´Ù†Ù‡Ø§Ø¯ÛŒ ÙØ¹Ù„ÛŒ Cloudflare).
+[exports.TelegramBatcher]
+type = "durable-object"
+storage = "sqlite"
+
+[vars]
+# Ø§ÛŒÙ† Ø¯Ùˆ Ù…Ù‚Ø¯Ø§Ø± Ù…Ø­Ø±Ù…Ø§Ù†Ù‡ Ù†ÛŒØ³ØªÙ†Ø¯Ø› Ø¨Ø§ Ù…Ø´Ø®ØµØ§Øª Ù…Ø®Ø²Ù† GitHub Ø®ÙˆØ¯Øª Ø¬Ø§ÛŒÚ¯Ø²ÛŒÙ† Ú©Ù†.
+GH_OWNER = "julian45455"
+GH_REPO = "class-reminder-bot"
+
+[observability]
+enabled = true

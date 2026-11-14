@@ -1,13 +1,10 @@
 """
 پردازش‌گر پیام‌های ورودی تلگرام برای ثبت/ویرایش/حذف امتحان
 ------------------------------------------------------------
-دو حالت اجرا:
-  ۱) repository_dispatch (از Cloudflare Worker، لحظه‌ای) — پیام تلگرام در
-     client_payload.update همراه event می‌آید، هیچ getUpdates زده نمی‌شود.
-  ۲) workflow_dispatch دستی / اجرای بدون client_payload — برای تست یا
-     زمانی که webhook هنوز تنظیم نشده، با getUpdates + offset قدیمی کار
-     می‌کند (توجه: تا وقتی webhook تلگرام فعال است getUpdates خطای ۴۰۹
-     می‌دهد؛ این مسیر فقط برای قبل از تنظیم webhook یا تست دستی است).
+دریافت پیام‌ها فقط از طریق Cloudflare Webhook و repository_dispatch انجام می‌شود.
+Cloudflare پیام‌ها را در Durable Object صف می‌کند و به‌صورت دسته‌ای می‌فرستد.
+این اسکریپت عمداً از getUpdates استفاده نمی‌کند تا با Webhook تلگرام تداخل 409
+ایجاد نشود. اجرای دستی Workflow بدون payload فقط یک اجرای بی‌اثر خواهد بود.
 
 فرمت پیام برای افزودن امتحان (با خط تیره جدا شود):
   <درس> - <بودجه‌بندی (اختیاری)> - <روز هفته (اختیاری)> - <روز عددی> - <ماه>
@@ -40,6 +37,8 @@ TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tehran")
 EXAMS_FILE = os.path.join(os.path.dirname(__file__), "exams.json")
 STATE_FILE = os.path.join(os.path.dirname(__file__), "bot_state.json")
 NOTES_FILE = os.path.join(os.path.dirname(__file__), "notes.json")
+OUTBOX_FILE = os.path.join(os.path.dirname(__file__), "outbox.json")
+PROCESSED_IDS_LIMIT = 1000
 
 PERSIAN_MONTHS = {
     "فروردین": 1, "اردیبهشت": 2, "خرداد": 3, "تیر": 4, "مرداد": 5, "شهریور": 6,
@@ -88,9 +87,12 @@ def load_json(path, default):
 
 
 def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
+    """ذخیره اتمیک JSON تا فایل در صورت توقف ناگهانی ناقص نماند."""
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    os.replace(tmp_path, path)
 
 
 def guess_jalali_year(month, day, tz):
@@ -387,27 +389,26 @@ def send_telegram_message(text):
     return resp.json()
 
 
-def get_updates(offset):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    params = {"timeout": 0}
-    if offset is not None:
-        params["offset"] = offset
-    resp = requests.get(url, params=params, timeout=20)
-    resp.raise_for_status()
-    return resp.json().get("result", [])
-
-
-def get_dispatch_message():
-    """اگر اجرا از طریق repository_dispatch با client_payload.update بوده، پیام را برمی‌گرداند."""
+def get_dispatch_updates():
+    """دریافت یک batch از repository_dispatch؛ بدون polling تلگرام."""
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if not event_path or not os.path.exists(event_path):
-        return None
+        return []
+
     with open(event_path, "r", encoding="utf-8") as f:
         event = json.load(f)
+
     payload = event.get("client_payload") or {}
+    updates = payload.get("updates")
+    if isinstance(updates, list):
+        return [u for u in updates if isinstance(u, dict)]
+
+    # سازگاری موقت با Worker قدیمی که هر بار فقط یک update می‌فرستاد.
     update = payload.get("update")
-    if not update:
-        return None
+    return [update] if isinstance(update, dict) else []
+
+
+def message_from_update(update):
     return (
         update.get("message")
         or update.get("edited_message")
@@ -416,114 +417,174 @@ def get_dispatch_message():
     )
 
 
-def collect_messages(tz):
-    """پیام‌های قابل‌پردازش این اجرا را برمی‌گرداند (حالت webhook یا polling قدیمی)."""
-    dispatch_msg = get_dispatch_message()
-    if dispatch_msg is not None:
-        return [dispatch_msg]
+def exam_is_duplicate(exams, parsed):
+    """یکسان بودن امتحان بر اساس تاریخ و نام درس؛ برای پیام تکی و چندتایی."""
+    course = " ".join(str(parsed.get("course", "")).split())
+    return any(
+        e.get("date") == parsed.get("date")
+        and " ".join(str(e.get("course", "")).split()) == course
+        for e in exams
+    )
 
-    state = load_json(STATE_FILE, {"last_update_id": None})
-    offset = (state["last_update_id"] + 1) if state.get("last_update_id") is not None else None
-    updates = get_updates(offset)
-    messages = []
-    for upd in updates:
-        state["last_update_id"] = upd["update_id"]
-        m = (
-            upd.get("message")
-            or upd.get("edited_message")
-            or upd.get("channel_post")
-            or upd.get("edited_channel_post")
-        )
-        if m:
-            messages.append(m)
-    save_json(STATE_FILE, state)
-    return messages
+
+def add_outbox_reply(outbox, update_id, reply_text):
+    if not reply_text:
+        return
+    reply_id = f"telegram-update-{update_id}"
+    if any(item.get("id") == reply_id for item in outbox):
+        return
+    outbox.append({
+        "id": reply_id,
+        "chat_id": CHAT_ID,
+        "text": reply_text,
+        "status": "pending",
+        "attempts": 0,
+    })
 
 
 def main():
     tz = pytz.timezone(TIMEZONE)
-    messages = collect_messages(tz)
-    if not messages:
-        print("پیام جدیدی نیست.")
+    print(
+        f"زمان اجرا (تهران): {datetime.now(tz):%Y-%m-%d %H:%M} | "
+        f"trigger: {os.environ.get('GITHUB_EVENT_NAME', '?')}"
+    )
+
+    updates = get_dispatch_updates()
+    if not updates:
+        print("هیچ payload وب‌هوکی وجود ندارد؛ polling عمداً غیرفعال است.")
         return
+
+    # ترتیب updateها حفظ می‌شود تا فرمان‌هایی مثل «لیست» و «حذف» قابل پیش‌بینی باشند.
+    updates.sort(key=lambda item: item.get("update_id", 0))
 
     exams = load_json(EXAMS_FILE, [])
     notes = load_json(NOTES_FILE, [])
-    changed = False
+    state = load_json(STATE_FILE, {})
+    outbox = load_json(OUTBOX_FILE, [])
+
+    processed_ids = [str(x) for x in state.get("processed_update_ids", [])]
+    processed_set = set(processed_ids)
+    outbox_before = len(outbox)
+    exams_changed = False
     notes_changed = False
+    state_changed = False
 
-    for msg in messages:
-        if "text" not in msg:
-            continue
-        chat_id = str(msg["chat"]["id"])
-        if chat_id != str(CHAT_ID):
-            print(f"پیام از چت ناشناس نادیده گرفته شد — chat_id={chat_id} | chat_type={msg['chat'].get('type')} | title={msg['chat'].get('title', msg['chat'].get('username', ''))}")
-            continue
+    for update in updates:
+        raw_update_id = update.get("update_id")
+        update_id = str(raw_update_id) if raw_update_id is not None else None
 
-        text = msg["text"].strip()
-
-        reply, note_changed, notes = handle_note_command(text, notes, tz)
-        if reply is not None:
-            send_telegram_message(reply)
-            notes_changed = notes_changed or note_changed
+        if update_id is not None and update_id in processed_set:
+            print(f"Update تکراری نادیده گرفته شد: {update_id}")
             continue
 
-        reply, cmd_changed, exams = handle_command(text, exams, tz)
-        if reply is not None:
-            send_telegram_message(reply)
-            changed = changed or cmd_changed
-            continue
+        reply_text = None
+        msg = message_from_update(update)
 
-        if text.startswith("/"):
-            continue  # سایر دستورات ناشناخته را نادیده بگیر
-
-        entries = split_entries(text)
-
-        if len(entries) <= 1:
-            parsed = parse_exam_message(text, tz)
-            if parsed is None:
-                send_telegram_message(HELP_TEXT)
-                continue
-            exams.append(parsed)
-            changed = True
-            send_telegram_message(f"✅ ثبت شد: {format_added(parsed)}")
-            continue
-
-        # چند مورد در یک پیام: هر خط/بخش جداگانه پارس و ذخیره می‌شود
-        added, duplicates, failed = [], [], []
-        for entry in entries:
-            parsed = parse_exam_message(entry, tz)
-            if parsed is None:
-                failed.append(entry)
-            elif any(e.get("date") == parsed["date"] and e.get("course") == parsed["course"] for e in exams):
-                duplicates.append(parsed)
+        if not msg or not isinstance(msg.get("text"), str):
+            print(f"Update بدون پیام متنی نادیده گرفته شد: {update_id}")
+        else:
+            msg_chat_id = str((msg.get("chat") or {}).get("id", ""))
+            if msg_chat_id != str(CHAT_ID):
+                print(
+                    "پیام از چت ناشناس نادیده گرفته شد — "
+                    f"chat_id={msg_chat_id}"
+                )
             else:
-                exams.append(parsed)
-                added.append(parsed)
+                text = msg["text"].strip()
 
-        if added:
-            changed = True
-        lines = []
-        if added:
-            added.sort(key=lambda e: e.get("date", ""))
-            lines.append(f"✅ {len(added)} مورد ثبت شد:")
-            lines += [f"• {format_added(e)}" for e in added]
-        if duplicates:
-            lines.append(f"↩️ {len(duplicates)} مورد تکراری بود (ثبت نشد):")
-            lines += [f"• {format_added(e)}" for e in duplicates]
-        if failed:
-            lines.append(f"⚠️ {len(failed)} مورد قابل‌تشخیص نبود (ثبت نشد):")
-            lines += [f"• {f}" for f in failed]
-            lines.append("فرمت: درس - بودجه‌بندی (اختیاری) - روز هفته (اختیاری) - روز - ماه")
-        send_telegram_message("\n".join(lines))
+                reply_text, note_changed, notes = handle_note_command(text, notes, tz)
+                notes_changed = notes_changed or note_changed
 
-    if changed:
+                if reply_text is None:
+                    reply_text, cmd_changed, exams = handle_command(text, exams, tz)
+                    exams_changed = exams_changed or cmd_changed
+
+                if reply_text is None and not text.startswith("/"):
+                    entries = split_entries(text)
+
+                    if len(entries) <= 1:
+                        parsed = parse_exam_message(text, tz)
+                        if parsed is None:
+                            reply_text = HELP_TEXT
+                        elif exam_is_duplicate(exams, parsed):
+                            reply_text = (
+                                "↩️ این امتحان از قبل ثبت شده بود و دوباره اضافه نشد: "
+                                f"{format_added(parsed)}"
+                            )
+                        else:
+                            exams.append(parsed)
+                            exams_changed = True
+                            reply_text = f"✅ ثبت شد: {format_added(parsed)}"
+                    else:
+                        added, duplicates, failed = [], [], []
+                        for entry in entries:
+                            parsed = parse_exam_message(entry, tz)
+                            if parsed is None:
+                                failed.append(entry)
+                            elif exam_is_duplicate(exams, parsed):
+                                duplicates.append(parsed)
+                            else:
+                                exams.append(parsed)
+                                added.append(parsed)
+
+                        if added:
+                            exams_changed = True
+                        lines = []
+                        if added:
+                            added.sort(key=lambda e: e.get("date", ""))
+                            lines.append(f"✅ {len(added)} مورد ثبت شد:")
+                            lines += [f"• {format_added(e)}" for e in added]
+                        if duplicates:
+                            lines.append(f"↩️ {len(duplicates)} مورد تکراری بود (ثبت نشد):")
+                            lines += [f"• {format_added(e)}" for e in duplicates]
+                        if failed:
+                            lines.append(f"⚠️ {len(failed)} مورد قابل‌تشخیص نبود (ثبت نشد):")
+                            lines += [f"• {item}" for item in failed]
+                            lines.append(
+                                "فرمت: درس - بودجه‌بندی (اختیاری) - "
+                                "روز هفته (اختیاری) - روز - ماه"
+                            )
+                        reply_text = "\n".join(lines) or "موردی برای ثبت پیدا نشد."
+
+                # فرمان‌های ناشناخته با / مثل قبل بی‌پاسخ می‌مانند.
+
+        if reply_text and update_id is not None:
+            add_outbox_reply(outbox, update_id, reply_text)
+        elif reply_text and update_id is None:
+            # Worker جدید همیشه update_id می‌فرستد؛ این مسیر فقط برای سازگاری است.
+            fallback_id = f"legacy-{len(outbox) + 1}"
+            add_outbox_reply(outbox, fallback_id, reply_text)
+
+        if update_id is not None:
+            processed_ids.append(update_id)
+            processed_set.add(update_id)
+            try:
+                numeric_id = int(raw_update_id)
+                old_last = state.get("last_update_id")
+                if old_last is None or numeric_id > int(old_last):
+                    state["last_update_id"] = numeric_id
+            except (TypeError, ValueError):
+                pass
+            state_changed = True
+
+    # فقط ۱۰۰۰ شناسهٔ اخیر نگه داشته می‌شوند؛ صف Cloudflare نیز dedupe مستقل دارد.
+    state["processed_update_ids"] = processed_ids[-PROCESSED_IDS_LIMIT:]
+
+    if exams_changed:
         exams.sort(key=lambda e: e.get("date", ""))
         save_json(EXAMS_FILE, exams)
-
     if notes_changed:
         notes.sort(key=lambda n: n.get("date", ""))
         save_json(NOTES_FILE, notes)
+    if state_changed:
+        save_json(STATE_FILE, state)
+    if len(outbox) != outbox_before:
+        save_json(OUTBOX_FILE, outbox)
+
+    print(
+        f"پردازش batch تمام شد: {len(updates)} update | "
+        f"پاسخ جدید: {len(outbox) - outbox_before}"
+    )
 
 
 if __name__ == "__main__":

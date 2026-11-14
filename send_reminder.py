@@ -7,6 +7,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 
 import jdatetime
@@ -72,7 +73,10 @@ def send_telegram_message(text, chat_id):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
     resp.raise_for_status()
-    return resp.json()
+    payload = resp.json()
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("description", "Telegram sendMessage failed"))
+    return payload
 
 
 def main():
@@ -90,13 +94,21 @@ def main():
         return
 
     text = format_message(classes, exams, notes)
-    targets = [CHAT_ID] + BROADCAST_CHAT_IDS
-    for chat_id in targets:
+    targets = list(dict.fromkeys([CHAT_ID] + BROADCAST_CHAT_IDS))
+    failures = 0
+    for index, chat_id in enumerate(targets):
         try:
             result = send_telegram_message(text, chat_id)
             print(f"ارسال شد به {chat_id}:", result.get("ok"))
-        except requests.RequestException as exc:
+        except (requests.RequestException, RuntimeError, ValueError) as exc:
+            failures += 1
             print(f"ارسال به {chat_id} ناموفق بود:", exc)
+        if index < len(targets) - 1:
+            time.sleep(1.1)
+    if failures:
+        print(f"تعداد ارسال‌های ناموفق: {failures}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
