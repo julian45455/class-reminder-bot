@@ -27,7 +27,8 @@
     "id": "telegram-update-471148954",
     "chat_id": "792669462",
     "text": "📚 کارهای مهم دانشگاه در 12 روز آینده (26 آبان تا 7 آذر):\n🗓 پاتو — Osteosarcoma 🔹 Chondrosarcoma 🔹 Burkitt lymphoma 🔹 Plasmacytoma 🔹 مغز استخوان نرمال — سه‌شنبه — 26 آبان",
-    "status": "pending",
-    "attempts": 0
+    "status": "sent",
+    "attempts": 1,
+    "sent_at": "2026-11-17T18:20:41.978041+00:00"
   }
 ]
