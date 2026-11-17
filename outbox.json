@@ -30,5 +30,12 @@
     "status": "sent",
     "attempts": 1,
     "sent_at": "2026-11-17T18:20:41.978041+00:00"
+  },
+  {
+    "id": "telegram-update-471148955",
+    "chat_id": "792669462",
+    "text": "✅ ثبت شد: «اطفال- --فصل 3 مک دونالد» — 3 آذر",
+    "status": "pending",
+    "attempts": 0
   }
 ]
